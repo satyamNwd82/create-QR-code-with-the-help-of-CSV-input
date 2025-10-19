@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV to QR Code Utility</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load qrcode.js for QR Code Generation (FIXED CDN) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Load html5-qrcode for QR Code Scanning -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        /* Custom styles for the app container and QR codes */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        .qr-code-container canvas {
+            display: inline-block;
+            margin: 1rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 8px;
+            background-color: white;
+        }
+        /* Style for the button */
+        .primary-btn {
+            @apply px-6 py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 transition duration-300 shadow-lg focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-start justify-center p-4 sm:p-8">
+
+    <div id="app-container" class="w-full max-w-4xl bg-white shadow-2xl rounded-2xl p-6 sm:p-10 mt-10">
+        <h1 class="text-3xl font-extrabold text-gray-900 mb-6 text-center">Event Pass QR Code System</h1>
+
+        <!-- Tab Navigation -->
+        <div class="mb-6 border-b border-gray-200">
+            <ul class="flex flex-wrap -mb-px text-sm font-medium text-center" id="myTab" role="tablist">
+                <li class="mr-2" role="presentation">
+                    <button id="generator-tab" data-tab="generator" class="inline-block p-4 border-b-2 rounded-t-lg active-tab-style" type="button" role="tab" aria-controls="generator" aria-selected="true" onclick="switchTab('generator')">
+                        QR Code Generator
+                    </button>
+                </li>
+                <li class="mr-2" role="presentation">
+                    <button id="scanner-tab" data-tab="scanner" class="inline-block p-4 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300" type="button" role="tab" aria-controls="scanner" aria-selected="false" onclick="switchTab('scanner')">
+                        QR Code Scanner
+                    </button>
+                </li>
+            </ul>
+        </div>
+
+        <!-- Tab Content -->
+        <div id="tab-content">
+            <!-- Generator Content -->
+            <div id="generator" class="tab-pane" role="tabpanel" aria-labelledby="generator-tab">
+                <div class="mb-4">
+                    <h2 class="text-xl font-semibold mb-2 text-gray-700">1. Upload CSV File</h2>
+                    <p class="text-sm text-gray-500 mb-4">
+                        The CSV must have the format: <code class="font-mono bg-gray-100 p-1 rounded">name,phonenumber,adult,child</code>
+                    </p>
+                    <input type="file" id="csvFile" accept=".csv" class="w-full p-3 border border-gray-300 rounded-xl focus:border-blue-500 focus:ring-blue-500" onchange="handleFileUpload()">
+                </div>
+
+                <div class="mb-6">
+                    <button onclick="handleFileUpload()" class="primary-btn w-full sm:w-auto mt-2" id="generateButton">Generate QR Codes</button>
+                </div>
+
+                <h2 class="text-xl font-semibold mb-4 text-gray-700">2. Generated Passes</h2>
+                <div id="loadingIndicator" class="text-center py-4 hidden">
+                    <svg class="animate-spin h-5 w-5 mr-3 inline text-blue-600" viewBox="0 0 24 24">...</svg>
+                    Processing CSV and generating codes...
+                </div>
+
+                <div id="qrCodesOutput" class="flex flex-wrap justify-center p-4 border border-dashed border-gray-300 rounded-xl bg-gray-50 min-h-32">
+                    <p class="text-gray-400 mt-8">Upload a CSV file to begin generation.</p>
+                </div>
+                <button onclick="printQRCodes()" class="primary-btn w-full sm:w-auto mt-6" id="printButton" disabled>Print All Passes</button>
+            </div>
+
+            <!-- Scanner Content -->
+            <div id="scanner" class="tab-pane hidden" role="tabpanel" aria-labelledby="scanner-tab">
+                <h2 class="text-xl font-semibold mb-4 text-gray-700">Scan QR Code</h2>
+                <div id="reader-container" class="w-full h-80 bg-gray-100 rounded-xl overflow-hidden mb-6">
+                    <div id="reader" style="width: 100%; height: 100%;"></div>
+                </div>
+
+                <div id="scanResultCard" class="bg-blue-50 p-6 rounded-xl border border-blue-200">
+                    <h3 class="text-lg font-bold text-blue-800 mb-2">Scan Result</h3>
+                    <div id="scanResultOutput" class="text-gray-700">
+                        Awaiting scan... Please ensure your camera is enabled.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let currentTab = 'generator';
+        let html5QrcodeScanner = null;
+
+        // Utility to escape HTML for display
+        function escapeHtml(unsafe) {
+            return unsafe
+                 .replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
+        }
+
+        // --- TAB SWITCHING LOGIC ---
+        function switchTab(tabId) {
+            currentTab = tabId;
+            const tabPanes = document.querySelectorAll('.tab-pane');
+            const tabs = document.querySelectorAll('[data-tab]');
+
+            tabPanes.forEach(pane => pane.classList.add('hidden'));
+            tabs.forEach(tab => tab.classList.remove('active-tab-style', 'border-blue-600', 'text-blue-600', 'hover:text-gray-600', 'hover:border-gray-300'));
+            tabs.forEach(tab => tab.classList.add('border-transparent', 'text-gray-500'));
+
+            document.getElementById(tabId).classList.remove('hidden');
+            const activeTab = document.getElementById(`${tabId}-tab`);
+            activeTab.classList.add('active-tab-style', 'border-blue-600', 'text-blue-600');
+            activeTab.classList.remove('border-transparent', 'text-gray-500', 'hover:text-gray-600', 'hover:border-gray-300');
+
+            // Handle Scanner Activation/Deactivation
+            if (tabId === 'scanner') {
+                startScanner();
+            } else {
+                stopScanner();
+            }
+        }
+
+        // Apply initial active style
+        document.addEventListener('DOMContentLoaded', () => {
+            switchTab('generator');
+        });
+
+        // --- GENERATOR LOGIC (CSV to QR) ---
+
+        /**
+         * Converts CSV text into a structured array of objects.
+         * Assumes header row is present: name,phonenumber,adult,child
+         * @param {string} csvText
+         */
+        function parseCSV(csvText) {
+            // Aggressively split lines and filter out any entirely empty or whitespace-only lines
+            const lines = csvText.split(/\r\n|\n/).filter(line => line.trim() !== '');
+            if (lines.length < 2) return [];
+
+            const header = lines[0].toLowerCase().split(',').map(h => h.trim());
+            const data = [];
+
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(v => v.trim());
+                
+                // Only create a record if the number of columns is correct AND the name field (first value) is not empty
+                if (values.length === header.length && values[0].trim() !== '') {
+                    const record = {
+                        name: values[0],
+                        phone: values[1],
+                        adult: parseInt(values[2] || 0),
+                        child: parseInt(values[3] || 0)
+                    };
+                    data.push(record);
+                }
+            }
+            return data;
+        }
+
+        /**
+         * Handles the file upload and initiates QR code generation.
+         */
+        async function handleFileUpload() {
+            const fileInput = document.getElementById('csvFile');
+            const files = fileInput.files;
+            const outputDiv = document.getElementById('qrCodesOutput');
+            const printButton = document.getElementById('printButton');
+            const loadingIndicator = document.getElementById('loadingIndicator');
+
+            outputDiv.innerHTML = '<p class="text-gray-400 mt-8">Processing...</p>';
+            printButton.disabled = true;
+            loadingIndicator.classList.remove('hidden');
+
+            if (files.length === 0) {
+                loadingIndicator.classList.add('hidden');
+                outputDiv.innerHTML = '<p class="text-red-500 mt-8">Please select a CSV file.</p>';
+                return;
+            }
+
+            try {
+                const file = files[0];
+                const text = await file.text();
+                const data = parseCSV(text);
+
+                // --- NEW LOGGING ---
+                console.log(`[QR-GEN] Successfully parsed ${data.length} records from CSV.`);
+                // -------------------
+                
+                if (data.length === 0) {
+                    outputDiv.innerHTML = '<p class="text-red-500 mt-8">No valid data found in the CSV (check header and format).</p>';
+                } else {
+                    generateQRCodes(data);
+                    printButton.disabled = false;
+                }
+            } catch (error) {
+                console.error("Error reading or processing file:", error);
+                outputDiv.innerHTML = `<p class="text-red-500 mt-8">An error occurred: ${escapeHtml(error.message)}</p>`;
+            } finally {
+                loadingIndicator.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Generates QR codes for each record and updates the UI.
+         * @param {Array<Object>} data - Array of attendee records.
+         */
+        function generateQRCodes(data) {
+            const outputDiv = document.getElementById('qrCodesOutput');
+            outputDiv.innerHTML = '';
+            const printArea = document.createElement('div');
+            printArea.id = 'printArea';
+            printArea.classList.add('flex', 'flex-wrap', 'justify-center');
+            outputDiv.appendChild(printArea);
+
+            data.forEach((record, index) => {
+                // Encode data as a pipe-separated string for compactness
+                // Ensure all fields are trimmed before encoding to prevent whitespace issues
+                const qrDataString = `${String(record.name).trim()}|${String(record.phone).trim()}|${record.adult}|${record.child}`;
+
+                // --- DIAGNOSTIC LOGGING ---
+                console.log(`[QR-GEN: Pass ${index + 1}] Encoded String: ${qrDataString}`);
+                // --------------------------
+
+                const passCard = document.createElement('div');
+                passCard.classList.add('p-4', 'm-2', 'bg-white', 'shadow-md', 'rounded-xl', 'w-64', 'border', 'border-gray-200', 'text-center', 'break-words', 'print-page-break'); // Added print-page-break for printing
+                passCard.style.pageBreakInside = 'avoid';
+
+                // Pass Title (Generic, replacing specific name)
+                const genericHeader = document.createElement('h4');
+                genericHeader.classList.add('font-bold', 'text-lg', 'mb-4', 'text-blue-600');
+                genericHeader.textContent = 'Event Admission Pass';
+                passCard.appendChild(genericHeader);
+
+                // QR Code Placeholder Div
+                const qrDiv = document.createElement('div');
+                qrDiv.id = `qr-code-${index}`;
+                qrDiv.classList.add('qr-code-container', 'mx-auto', 'w-32', 'h-32', 'mt-4'); 
+                passCard.appendChild(qrDiv);
+
+                // Small instruction text
+                const instruction = document.createElement('p');
+                instruction.classList.add('text-xs', 'text-gray-500', 'mt-4');
+                instruction.textContent = 'Scan to verify entry details.';
+                passCard.appendChild(instruction);
+                
+                // *** REMOVED ATTENDEE NAME AND GUEST COUNT DETAILS from the pass card display ***
+
+                printArea.appendChild(passCard);
+
+                // Initialize QR Code
+                new QRCode(qrDiv, {
+                    text: qrDataString,
+                    width: 128,
+                    height: 128,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.H
+                });
+            });
+        }
+
+        /**
+         * Prints the generated QR codes.
+         */
+        function printQRCodes() {
+            const printContents = document.getElementById('printArea').outerHTML;
+            const originalContents = document.body.innerHTML;
+            const printWindow = window.open('', '_blank');
+
+            printWindow.document.write('<html><head><title>Print QR Passes</title>');
+            printWindow.document.write('<style>');
+            printWindow.document.write(`
+                body { font-family: 'Inter', sans-serif; margin: 20px; }
+                .print-page-break {
+                    break-before: always;
+                    width: 250px;
+                    display: inline-block;
+                    margin: 10px;
+                    padding: 15px;
+                    border: 1px solid #ccc;
+                    border-radius: 8px;
+                    text-align: center;
+                }
+                .print-page-break h4 { color: #1d4ed8; font-size: 18px; margin-bottom: 10px; }
+                .qr-code-container canvas { margin: 0; padding: 5px; border: 1px solid #e5e7eb; border-radius: 4px; }
+            `);
+            printWindow.document.write('</style></head><body>');
+            printWindow.document.write(printContents);
+            printWindow.document.write('</body></html>');
+
+            printWindow.document.close();
+            printWindow.focus();
+            setTimeout(() => {
+                 printWindow.print();
+            }, 500);
+
+        }
+
+        // --- SCANNER LOGIC (QR to Data) ---
+
+        function onScanSuccess(decodedText, decodedResult) {
+            console.log(`Scan successful: ${decodedText}`);
+            stopScanner(); // Stop scanning immediately after a successful read
+            displayScanResult(decodedText);
+            // Re-start scanner after a brief delay for continuous scanning (optional)
+            // setTimeout(startScanner, 3000);
+        }
+
+        function onScanError(errorMessage) {
+            // Error logging, but we don't want to show constant errors to the user
+            // console.warn(`Code scan error = ${errorMessage}`);
+        }
+
+        function startScanner() {
+            const reader = document.getElementById('reader');
+            if (reader && !html5QrcodeScanner) {
+                // Removed supportedScanTypes to fix "ReferenceError: Html5QrcodeSupportedDevices is not defined"
+                // The scanner defaults to supporting QR codes.
+                const config = {
+                    fps: 10,
+                    qrbox: { width: 250, height: 250 },
+                    // supportedScanTypes: [Html5QrcodeSupportedDevices.QrCode] 
+                };
+
+                html5QrcodeScanner = new Html5QrcodeScanner("reader", config, false);
+                html5QrcodeScanner.render(onScanSuccess, onScanError);
+
+                // Update the result card to show status
+                document.getElementById('scanResultOutput').innerHTML = '<span class="text-green-600 font-semibold">Scanner Active. Point camera at a QR code.</span>';
+            }
+        }
+
+        function stopScanner() {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.clear().catch(error => {
+                    console.error("Failed to stop scanner: ", error);
+                });
+                html5QrcodeScanner = null;
+            }
+        }
+
+
+        /**
+         * Parses the pipe-separated QR data and displays it in the result card.
+         * Format: NAME|PHONE|ADULT_COUNT|CHILD_COUNT
+         * @param {string} dataString
+         */
+        function displayScanResult(dataString) {
+            const parts = dataString.split('|');
+
+            // --- DIAGNOSTIC LOGGING ---
+            console.log(`[QR-SCAN] Decoded Parts Array:`, parts);
+            // --------------------------
+
+            const outputDiv = document.getElementById('scanResultOutput');
+
+            if (parts.length === 4) {
+                // Ensure all parts are explicitly trimmed again just in case the scanner introduced whitespace
+                const [name, phone, adult, child] = parts.map(p => p.trim());
+
+                outputDiv.innerHTML = `
+                    <p class="text-2xl font-bold text-gray-900 mb-4">${escapeHtml(name)}</p>
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <p class="font-medium text-blue-700">Phone Number:</p>
+                            <p class="text-gray-800">${escapeHtml(phone)}</p>
+                        </div>
+                        <div>
+                            <p class="font-medium text-blue-700">Admission Status:</p>
+                            <span class="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-800">
+                                Verified Pass
+                            </span>
+                        </div>
+                        <div>
+                            <p class="font-medium text-blue-700">Adult Guests:</p>
+                            <p class="text-gray-800 text-xl">${escapeHtml(adult)}</p>
+                        </div>
+                        <div>
+                            <p class="font-medium text-blue-700">Child Guests:</p>
+                            <p class="text-gray-800 text-xl">${escapeHtml(child)}</p>
+                        </div>
+                    </div>
+                    <button onclick="startScanner()" class="primary-btn mt-4 bg-green-600 hover:bg-green-700 w-full">Scan Next Pass</button>
+                `;
+            } else {
+                outputDiv.innerHTML = `
+                    <p class="text-red-600 font-semibold">Error: Invalid QR Code Format</p>
+                    <p class="text-sm text-gray-700">The scanned data was not recognized as a valid pass. Expected 4 fields, got ${parts.length}.</p>
+                    <p class="text-sm text-gray-700">Scanned data: <code class="break-all">${escapeHtml(dataString)}</code></p>
+                    <button onclick="startScanner()" class="primary-btn mt-4 w-full">Try Scanning Again</button>
+                `;
+            }
+        }
+
+    </script>
+</body>
+</html>
